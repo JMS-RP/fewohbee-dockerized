@@ -38,8 +38,10 @@ services:
                 condition: service_healthy
             php:
                 condition: service_started
-        ports:
-            - ${LISTEN_PORT:-80}:80
+        expose:
+            - "80"
+        labels:
+            - "traefik.docker.network=coolify"
         volumes:
             - uploads-export:/var/www/html/public/resources/images/export
             - uploads-roomcat:/var/www/html/public/resources/images/room-categories
@@ -48,7 +50,10 @@ services:
             - PHP_FPM_HOST=php:9000
             - REVERSE_PROXY=true
         networks:
-            - internal-network
+            internal-network:
+                driver: bridge
+            coolify:
+                external: true
         healthcheck:
             test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health/live || exit 1"]
             interval: 10s
