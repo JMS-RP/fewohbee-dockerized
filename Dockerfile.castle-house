@@ -4,6 +4,9 @@ FROM ghcr.io/developeregrem/fewohbee-phpfpm:${FEWOHBEE_VERSION}
 # Keep the upstream application and entrypoint. Only make the public booking
 # address fields optional, matching Castle House's guest form.
 COPY --chown=www-data:www-data conf/php/optional-booking-address.php /tmp/optional-booking-address.php
+COPY --chown=www-data:www-data conf/php/secure-user-password.php /tmp/secure-user-password.php
 RUN TZ=UTC php /tmp/optional-booking-address.php \
+    && TZ=UTC php /tmp/secure-user-password.php \
     && TZ=UTC php -l /var/www/html/src/Service/OnlineBooking/PublicBookingService.php \
-    && rm /tmp/optional-booking-address.php
+    && TZ=UTC php -l /var/www/html/src/Command/CreateUserCommand.php \
+    && rm /tmp/optional-booking-address.php /tmp/secure-user-password.php

@@ -101,6 +101,20 @@ Then run once to create the first admin user, load base templates and optionally
 docker compose exec --user www-data php /bin/sh -c "php bin/console app:first-run"
 ```
 
+## Connect Castle House when the old login is unknown
+
+You can create a separate calendar account from the hosting server without recovering or changing an existing user's password. After rebuilding this customized PHP image, run this in the FewohBee repository directory:
+
+```sh
+docker compose exec --user www-data php php bin/console app:create-user
+```
+
+If you are already in the FewohBee **PHP container terminal** (for example through Coolify), use `php bin/console app:create-user` directly. Choose a new username such as `castlehouse-calendar`, a strong password, the account's name and contact email, and only the `ROLE_RESERVATIONS` role. The password prompt is hidden in the customized image. FewohBee validates and hashes the password; no existing accounts or reservations are changed. Do not rerun `app:first-run` to recover a login.
+
+Save the username and password securely on the **website application** as `FEWOHBEE_SYNC_USERNAME` and `FEWOHBEE_SYNC_PASSWORD`, then redeploy that application. Keep the password out of source control and chat. This account can also be used to inspect reservations in FewohBee. Compare the website's old Freed records with actual FewohBee bookings before cancelling any test reservations: freeing a website hold did not cancel its PMS reservation. Preserve Dudley Room's genuine booking for 23–24 October 2026 and any other genuine guest bookings.
+
+The same credentials must be supplied securely to the Codex cloud environment if Codex is to inspect or repair PMS records. Git access and public availability access do not grant private PMS or hosting access.
+
 ## Updates
 
 ```sh
