@@ -17,6 +17,10 @@ The images are versioned via the `FEWOHBEE_VERSION` variable in `.env` (default:
 
 ### Castle House booking form
 
+The customized PHP image also supplies private, session-authenticated cancellation controls at `/reservation/castle-house/release`. They require `ROLE_RESERVATIONS` and an action-specific CSRF token. Guest identity is sent only in POST bodies, and the response never includes guest details. Each cancellation matches one released room, arrival/departure, booking origin and booker identity; new website requests carry a `[CHB:...]` reference in their remark. Ambiguous older matches are refused. Cancellation changes the existing reservation to FewohBee's non-blocking cancellation status through its usual status service, retaining guest, invoice and booking history. It does not delete the booking or cancel other rooms in its group.
+
+Rebuild and redeploy the **FewohBee PHP service first**, then the website. The website queues the owner’s Free action, keeps its hold until cancellation is verified, and retries interrupted operations without another click. Older entries freed only on the website have a **Finish freeing in both systems** action. If the updated private controls are unavailable, the website keeps the booking held and shows the required deployment step. The PHP image rebuilds its authoritative Composer class map and clears its baked Symfony production cache so the new routes and services are registered on startup.
+
 Castle House's website collects the guest's name, email, optional phone and country, without requesting Address, Postcode or Town. The `php` service builds `Dockerfile.castle-house` from the same versioned upstream PHP image and makes only those three public-booking fields optional on the server. Country, name and email validation remain intact; missing postal details are stored as null, not invented values. Admin customer data and existing addresses are preserved.
 
 The customization is enabled in both Compose variants and rebuilt during normal deployment. `install.sh` and `update-docker.sh` also build it. Build the PHP image before recreating it when updating manually:
@@ -111,7 +115,7 @@ docker compose exec --user www-data php php bin/console app:create-user
 
 If you are already in the FewohBee **PHP container terminal** (for example through Coolify), use `php bin/console app:create-user` directly. Choose a new username such as `castlehouse-calendar`, a strong password, the account's name and contact email, and only the `ROLE_RESERVATIONS` role. The password prompt is hidden in the customized image. FewohBee validates and hashes the password; no existing accounts or reservations are changed. Do not rerun `app:first-run` to recover a login.
 
-Save the username and password securely on the **website application** as `FEWOHBEE_SYNC_USERNAME` and `FEWOHBEE_SYNC_PASSWORD`, then redeploy that application. Keep the password out of source control and chat. This account can also be used to inspect reservations in FewohBee. Compare the website's old Freed records with actual FewohBee bookings before cancelling any test reservations: freeing a website hold did not cancel its PMS reservation. Preserve Dudley Room's genuine booking for 23–24 October 2026 and any other genuine guest bookings.
+Save the username and password securely on the **website application** as `FEWOHBEE_SYNC_USERNAME` and `FEWOHBEE_SYNC_PASSWORD`, then redeploy that application. Keep the password out of source control and chat. This account can also be used to inspect reservations in FewohBee. Compare older website-only Freed records with actual FewohBee bookings before using **Finish freeing in both systems**. Cancel only the records the owner selects, preserving other guest bookings.
 
 The same credentials must be supplied securely to the Codex cloud environment if Codex is to inspect or repair PMS records. Git access and public availability access do not grant private PMS or hosting access.
 

@@ -1,12 +1,20 @@
 ARG FEWOHBEE_VERSION=latest
 FROM ghcr.io/developeregrem/fewohbee-phpfpm:${FEWOHBEE_VERSION}
 
-# Keep the upstream application and entrypoint. Only make the public booking
-# address fields optional, matching Castle House's guest form.
+# Keep the upstream app and entrypoint; customize guest fields, the password
+# prompt and the private, protected cancellation connection for Castle House.
 COPY --chown=www-data:www-data conf/php/optional-booking-address.php /tmp/optional-booking-address.php
 COPY --chown=www-data:www-data conf/php/secure-user-password.php /tmp/secure-user-password.php
+COPY --chown=www-data:www-data conf/php/CastleHouseReleaseService.php /var/www/html/src/Service/CastleHouseReleaseService.php
+COPY --chown=www-data:www-data conf/php/CastleHouseReleaseController.php /var/www/html/src/Controller/CastleHouseReleaseController.php
+USER root
 RUN TZ=UTC php /tmp/optional-booking-address.php \
     && TZ=UTC php /tmp/secure-user-password.php \
     && TZ=UTC php -l /var/www/html/src/Service/OnlineBooking/PublicBookingService.php \
     && TZ=UTC php -l /var/www/html/src/Command/CreateUserCommand.php \
+    && TZ=UTC php -l /var/www/html/src/Service/CastleHouseReleaseService.php \
+    && TZ=UTC php -l /var/www/html/src/Controller/CastleHouseReleaseController.php \
+    && COMPOSER_ALLOW_SUPERUSER=1 TZ=UTC composer dump-autoload --no-dev --classmap-authoritative --no-scripts --no-plugins --no-interaction \
+    && rm -rf /var/www/html/var/cache/prod \
     && rm /tmp/optional-booking-address.php /tmp/secure-user-password.php
+USER www-data
