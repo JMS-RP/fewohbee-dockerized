@@ -87,7 +87,13 @@ services:
             - internal-network
 
     php:
-        image: ghcr.io/developeregrem/fewohbee-phpfpm:${FEWOHBEE_VERSION:-latest}
+        image: castlehouse-fewohbee-phpfpm:${FEWOHBEE_VERSION:-latest}
+        pull_policy: build
+        build:
+            context: .
+            dockerfile: Dockerfile.castle-house
+            args:
+                FEWOHBEE_VERSION: ${FEWOHBEE_VERSION:-latest}
         depends_on:
             db:
                 condition: service_healthy

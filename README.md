@@ -15,6 +15,19 @@ This docker compose setup is part of the [fewohbee guesthouse administration too
 
 The images are versioned via the `FEWOHBEE_VERSION` variable in `.env` (default: `latest`). Pin to a specific release (`4.6.0`), branch (`branch-feature-x`) or debug build (`4.6.0-debug`).
 
+### Castle House booking form
+
+Castle House's website collects the guest's name, email, optional phone and country, without requesting Address, Postcode or Town. The `php` service builds `Dockerfile.castle-house` from the same versioned upstream PHP image and makes only those three public-booking fields optional on the server. Country, name and email validation remain intact; missing postal details are stored as null, not invented values. Admin customer data and existing addresses are preserved.
+
+The customization is enabled in both Compose variants and rebuilt during normal deployment. `install.sh` and `update-docker.sh` also build it. Build the PHP image before recreating it when updating manually:
+
+```sh
+docker compose build --pull php
+docker compose up -d --force-recreate php
+```
+
+The build checks the exact upstream validation block and fails before deployment if upstream changes require reviewing the customization. It also lints the modified PHP file. `.env` files and Git metadata are excluded from the image build context. No database schema change is needed. If deploying through a platform that only pulls prebuilt images, build and publish this customized image first and select it for the PHP service; the stock upstream image still requires postal addresses.
+
 ## Configuration
 
 All settings are stored in a single `.env` file. Use `.env.dist` as the reference template.

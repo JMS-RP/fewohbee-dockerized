@@ -318,7 +318,7 @@ mv $envTmp $envEnd
 
 ########## pull, build and start environment ##########
 echo "Preparing and starting docker-compose setup ..."
-$dockerComposeBin up -d
+$dockerComposeBin up -d --build
 
 if [ $? -ne 0 ]
 then

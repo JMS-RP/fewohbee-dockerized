@@ -123,7 +123,8 @@ if [ "$cronMode" = false ]; then
 fi
 
 # Pull new images
-$dockerBin compose pull
+$dockerBin compose pull --ignore-buildable
+$dockerBin compose build --pull php
 
 # Start containers. The uploads-migration init container runs first and
 # (idempotently) copies legacy feb-data uploads into the new volumes before
