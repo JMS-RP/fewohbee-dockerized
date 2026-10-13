@@ -7,6 +7,8 @@ COPY --chown=www-data:www-data conf/php/optional-booking-address.php /tmp/option
 COPY --chown=www-data:www-data conf/php/secure-user-password.php /tmp/secure-user-password.php
 COPY --chown=www-data:www-data conf/php/CastleHouseReleaseService.php /var/www/html/src/Service/CastleHouseReleaseService.php
 COPY --chown=www-data:www-data conf/php/CastleHouseReleaseController.php /var/www/html/src/Controller/CastleHouseReleaseController.php
+COPY --chown=www-data:www-data conf/php/CastleHouseCalendarService.php /var/www/html/src/Service/CastleHouseCalendarService.php
+COPY --chown=www-data:www-data conf/php/CastleHouseCalendarController.php /var/www/html/src/Controller/CastleHouseCalendarController.php
 USER root
 RUN TZ=UTC php /tmp/optional-booking-address.php \
     && TZ=UTC php /tmp/secure-user-password.php \
@@ -14,6 +16,8 @@ RUN TZ=UTC php /tmp/optional-booking-address.php \
     && TZ=UTC php -l /var/www/html/src/Command/CreateUserCommand.php \
     && TZ=UTC php -l /var/www/html/src/Service/CastleHouseReleaseService.php \
     && TZ=UTC php -l /var/www/html/src/Controller/CastleHouseReleaseController.php \
+    && TZ=UTC php -l /var/www/html/src/Service/CastleHouseCalendarService.php \
+    && TZ=UTC php -l /var/www/html/src/Controller/CastleHouseCalendarController.php \
     && COMPOSER_ALLOW_SUPERUSER=1 TZ=UTC composer dump-autoload --no-dev --classmap-authoritative --no-scripts --no-plugins --no-interaction \
     && rm -rf /var/www/html/var/cache/prod \
     && rm /tmp/optional-booking-address.php /tmp/secure-user-password.php
