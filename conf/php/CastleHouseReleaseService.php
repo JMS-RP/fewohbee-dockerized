@@ -77,7 +77,11 @@ final class CastleHouseReleaseService
         $matches = [];
         foreach ($candidates as $reservation) {
             $booker = $reservation->getBooker();
-            if ($booker === null || self::normalize($booker->getFirstname().' '.$booker->getLastname()) !== $name) {
+            // Public bookings reuse the existing CRM customer by email and do
+            // not overwrite its curated name. A website reference therefore
+            // identifies the request even when its submitted name differs.
+            // Older requests without a reference still require the full name.
+            if ($booker === null || ($marker === '' && self::normalize($booker->getFirstname().' '.$booker->getLastname()) !== $name)) {
                 continue;
             }
             $emails = [];

@@ -113,12 +113,22 @@ $input = ['arrival'=>'2026-10-23','departure'=>'2026-10-24','room'=>'Dudley Room
 check($service->find($input) === $records->records[0], 'Wrong room matched.');
 
 // Wrong identities or marker must never silently free a held room.
-foreach ([['email'=>'other@example.test'], ['name'=>'Another Guest'], ['marker'=>'[CHB:ffffffffffff]']] as $wrong) {
+foreach ([['email'=>'other@example.test'], ['name'=>'Another Guest', 'marker'=>''], ['marker'=>'[CHB:ffffffffffff]']] as $wrong) {
     $rejected = false;
     try { $service->find(array_replace($input, $wrong)); }
     catch (ConflictHttpException) { $rejected = true; }
     check($rejected && $manager->flushes === 0, 'Mismatched booking identity was accepted.');
 }
+
+// The public booking service reuses customers by email without overwriting an
+// existing CRM name. The stable reference must still match that exact stay.
+$submittedAlias = array_replace($input, ['name'=>'A Different Submitted Name']);
+check($service->find($submittedAlias) === $records->records[0], 'A reused customer name prevented reference matching.');
+check($guest->getFirstname() === 'Test' && $guest->getLastname() === 'Guest', 'Matching changed curated CRM names.');
+$rejected = false;
+try { $service->find(array_replace($submittedAlias, ['email'=>'other@example.test'])); }
+catch (ConflictHttpException) { $rejected = true; }
+check($rejected && $manager->flushes === 0, 'A reference bypassed the matching customer email.');
 
 // Existing duplicates must be reviewed rather than selecting the first.
 $duplicate = clone $records->records[0]; $duplicate->setId(99); $records->records[] = $duplicate;
@@ -144,7 +154,7 @@ $controller = new CastleHouseReleaseController(); $controller->setContainer($con
 $attributes = (new ReflectionClass($controller))->getAttributes(IsGranted::class);
 check($attributes[0]->getArguments()[0] === 'ROLE_RESERVATIONS', 'Controller lost its write-role requirement.');
 $token = json_decode($controller->form($tokens)->getContent(), true)['token'];
-$request = Request::create('/reservation/castle-house/release', 'POST', $input+['_token'=>'wrong','reservation_id'=>'11']);
+$request = Request::create('/reservation/castle-house/release', 'POST', $submittedAlias+['_token'=>'wrong','reservation_id'=>'11']);
 $request->attributes->set('_route', 'castle_house.release.cancel');
 check($controller->release($request, $service)->getStatusCode() === 403 && $manager->flushes === 0, 'Invalid CSRF caused a mutation.');
 $request->request->set('_token', $token); $request->request->set('reservation_id', '12');
