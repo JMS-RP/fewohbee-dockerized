@@ -7,6 +7,7 @@ namespace App\Service;
 use App\Entity\Appartment;
 use App\Entity\OnlineBookingConfig;
 use App\Entity\Price;
+use App\Entity\Reservation;
 use App\Entity\RoomCategory;
 use App\Repository\AppartmentRepository;
 use App\Service\OnlineBooking\OnlineBookingConfigService;
@@ -48,19 +49,11 @@ final class CastleHouseRoomService
         if (!$config->isEnabled()) {
             throw new ConflictHttpException('booking_disabled');
         }
-        return $this->em->wrapInTransaction(function () use ($key, $label, $description, $anchors, $nightly, $weekend, $config): array {
+        return $this->em->wrapInTransaction(function () use ($key, $label, $description, $anchors, $nightly, $weekend, $config, $input): array {
             // Refresh after taking the shared config lock: concurrent requests must
             // see the first request's room and selected-room list before creating.
             $this->em->refresh($config, LockMode::PESSIMISTIC_WRITE);
-            $released = $this->rooms->findForPublicBooking($this->config->getAllowedRoomIds($config), $this->config->getAllowedSubsidiaryIds($config));
-            $matched = [];
-            foreach ($anchors as $anchor) {
-                $found = array_values(array_filter($released, fn (Appartment $room): bool => self::label($room) === self::normalise($anchor)));
-                if (count($found) !== 1) {
-                    throw new ConflictHttpException('ambiguous_property');
-                }
-                $matched[] = $found[0];
-            }
+            $matched = $this->anchors($anchors, $config);
             $property = $matched[0]->getObject();
             foreach ($matched as $anchor) {
                 if ($anchor->getObject()->getId() !== $property->getId()) {
@@ -76,10 +69,14 @@ final class CastleHouseRoomService
             }
             $room = $sameKey[0] ?? $sameName[0] ?? null;
             if ($room !== null) {
-                if (self::label($room) !== self::normalise($label) || !$room->isActive() || $room->isMultipleOccupancy()
+                $expectedId = (string)($input['roomId'] ?? '');
+                if (self::label($room) !== self::normalise($label) || $room->isMultipleOccupancy()
+                    || ($expectedId !== '' && $expectedId !== (string)$room->getId())
+                    || (!$room->isActive() && !$sameKey && $expectedId !== (string)$room->getId())
                     || (int) $room->getBedsMax() !== 2) {
                     throw new ConflictHttpException('room_changed');
                 }
+                $room->setActive(true); // Explicitly publishing a restored draft reopens its inventory.
             } else {
                 // Do not merge this new inventory into a category belonging to
                 // another property or a hidden room with the same label.
@@ -145,6 +142,79 @@ final class CastleHouseRoomService
             }
             return ['state' => 'ready', 'roomId' => (int) $room->getId(), 'label' => $room->getRoomCategory()?->getName() ?: $room->getDescription()];
         });
+    }
+
+    /** Deactivate a room, retaining reservations, invoices, prices and photographs. */
+    public function remove(array $input): array
+    {
+        $key = (string)($input['key'] ?? '');
+        $label = trim((string)($input['label'] ?? ''));
+        $anchors = json_decode((string)($input['anchors'] ?? ''), true);
+        $identifier = (string)($input['roomId'] ?? '');
+        if (!preg_match('/^[a-z0-9][a-z0-9-]{0,39}$/D', $key) || mb_strlen($label) < 4 || mb_strlen($label) > 80
+            || !is_array($anchors) || !$anchors || count($anchors) > 50
+            || ($identifier !== '' && !preg_match('/^[1-9][0-9]{0,9}$/D', $identifier))) {
+            throw new BadRequestHttpException('invalid_room');
+        }
+        $config = $this->config->getConfig();
+        return $this->em->wrapInTransaction(function () use ($key, $label, $anchors, $identifier, $config): array {
+            $this->em->refresh($config, LockMode::PESSIMISTIC_WRITE);
+            $parents = $this->anchors($anchors, $config);
+            $property = $parents[0]->getObject();
+            foreach ($parents as $parent) {
+                if ($parent->getObject()->getId() !== $property->getId()) {
+                    throw new ConflictHttpException('ambiguous_property');
+                }
+            }
+            $number = 'CH'.substr(hash('sha256', $key), 0, 8);
+            $matches = array_values(array_filter($this->rooms->findBy(['object' => $property]), fn (Appartment $room): bool =>
+                $identifier !== '' ? (string)$room->getId() === $identifier
+                : ($room->getNumber() === $number || self::label($room) === self::normalise($label))));
+            if (!$matches) {
+                // An absent known ID is safe only when it does not identify another property.
+                if ($identifier !== '' && $this->em->find(Appartment::class,(int)$identifier) !== null) {
+                    throw new ConflictHttpException('ambiguous_room');
+                }
+                return ['state'=>'absent', 'roomId'=>$identifier === '' ? null : (int)$identifier];
+            }
+            if (count($matches) !== 1 || self::label($matches[0]) !== self::normalise($label)) {
+                throw new ConflictHttpException('ambiguous_room');
+            }
+            $room = $matches[0];
+            $this->em->refresh($room, LockMode::PESSIMISTIC_WRITE);
+            $today = new \DateTimeImmutable('today');
+            foreach ($this->em->getRepository(Reservation::class)->findBy(['appartment'=>$room]) as $stay) {
+                if ($stay->getEndDate() > $today && $stay->getReservationStatus()?->isBlocking() !== false) {
+                    throw new ConflictHttpException('room_has_bookings');
+                }
+            }
+            $room->setActive(false);
+            if ($config->getRoomsMode() === OnlineBookingConfig::ROOMS_MODE_SELECTED) {
+                $config->setSelectedRoomIds(array_values(array_diff($config->getSelectedRoomIds(),[(int)$room->getId()])));
+            }
+            return ['state'=>'inactive', 'roomId'=>(int)$room->getId()];
+        });
+    }
+
+    private function anchors(array $labels, OnlineBookingConfig $config): array
+    {
+        $properties = $this->config->getAllowedSubsidiaryIds($config);
+        $released = $this->rooms->findForPublicBooking($this->config->getAllowedRoomIds($config), $properties);
+        $inactive = array_values(array_filter($this->rooms->findBy([]), fn (Appartment $room): bool =>
+            !$room->isActive() && in_array((int)$room->getObject()->getId(), $properties, true)));
+        $matched=[];
+        foreach ($labels as $label) {
+            if (!is_string($label) || mb_strlen($label) < 4 || mb_strlen($label) > 80) {
+                throw new BadRequestHttpException('invalid_room');
+            }
+            $found=array_values(array_filter($released, fn (Appartment $room): bool => self::label($room) === self::normalise($label)));
+            if (!$found) {
+                $found=array_values(array_filter($inactive, fn (Appartment $room): bool => self::label($room) === self::normalise($label)));
+            }
+            if (count($found) !== 1) throw new ConflictHttpException('ambiguous_property');
+            $matched[]=$found[0];
+        }
+        return $matched;
     }
 
     private static function normalise(string $label): string

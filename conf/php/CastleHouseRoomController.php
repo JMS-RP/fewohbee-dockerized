@@ -22,7 +22,7 @@ final class CastleHouseRoomController extends AbstractController
     #[Route('/form', name: 'castle_house.rooms.form', methods: ['GET'])]
     public function form(CsrfTokenManagerInterface $tokens): JsonResponse
     {
-        return new JsonResponse(['token' => $tokens->getToken(self::TOKEN_ID)->getValue()], headers: ['Cache-Control' => 'no-store']);
+        return new JsonResponse(['token' => $tokens->getToken(self::TOKEN_ID)->getValue(), 'canDelete' => true], headers: ['Cache-Control' => 'no-store']);
     }
 
     #[Route('', name: 'castle_house.rooms.ensure', methods: ['POST'])]
@@ -33,6 +33,19 @@ final class CastleHouseRoomController extends AbstractController
         }
         try {
             return new JsonResponse($service->ensure($request->request->all()), headers: ['Cache-Control' => 'no-store']);
+        } catch (HttpExceptionInterface $error) {
+            return new JsonResponse(['error' => $error->getMessage()], $error->getStatusCode(), ['Cache-Control' => 'no-store']);
+        }
+    }
+
+    #[Route('/remove', name: 'castle_house.rooms.remove', methods: ['POST'])]
+    public function remove(Request $request, CastleHouseRoomService $service): JsonResponse
+    {
+        if (!$this->isCsrfTokenValid(self::TOKEN_ID, $request->request->getString('_token'))) {
+            return new JsonResponse(['error' => 'invalid_token'], 403, ['Cache-Control' => 'no-store']);
+        }
+        try {
+            return new JsonResponse($service->remove($request->request->all()), headers: ['Cache-Control' => 'no-store']);
         } catch (HttpExceptionInterface $error) {
             return new JsonResponse(['error' => $error->getMessage()], $error->getStatusCode(), ['Cache-Control' => 'no-store']);
         }

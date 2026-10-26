@@ -9,6 +9,8 @@ use App\Entity\Appartment;
 use App\Entity\OnlineBookingConfig;
 use App\Entity\Price;
 use App\Entity\ReservationOrigin;
+use App\Entity\Reservation;
+use App\Entity\ReservationStatus;
 use App\Entity\RoomCategory;
 use App\Entity\Subsidiary;
 use App\Repository\AppartmentRepository;
@@ -17,6 +19,7 @@ use App\Service\OnlineBooking\OnlineBookingConfigService;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\ORM\EntityManager;
+use Doctrine\ORM\EntityRepository;
 use Doctrine\ORM\ORMSetup;
 use Doctrine\ORM\Tools\SchemaTool;
 use Symfony\Bridge\Doctrine\Types\UuidType;
@@ -33,6 +36,19 @@ use Symfony\Component\Security\Csrf\TokenStorage\SessionTokenStorage;
 use Symfony\Component\Security\Http\Attribute\IsGranted;
 
 function verifyRoom(bool $ok, string $message): void { if (!$ok) throw new RuntimeException($message); }
+
+class SetupStays extends EntityRepository
+{
+    public function __construct(private array $stays) {}
+    public function findBy(array $criteria, ?array $orderBy=null, ?int $limit=null, ?int $offset=null): array
+    { return array_values(array_filter($this->stays, fn ($stay) => $stay->getAppartment()->getId() === $criteria['appartment']->getId())); }
+}
+class SetupManager extends EntityManager
+{
+    public array $stays=[];
+    public function getRepository(string $className): EntityRepository
+    { return $className === Reservation::class ? new SetupStays($this->stays) : parent::getRepository($className); }
+}
 
 class SetupRooms extends AppartmentRepository
 {
@@ -57,7 +73,7 @@ class SetupConfig extends OnlineBookingConfigService
 if (!Type::hasType('uuid')) Type::addType('uuid', UuidType::class);
 $orm = ORMSetup::createAttributeMetadataConfiguration(['/var/www/html/src/Entity'], true);
 $orm->enableNativeLazyObjects(true);
-$em = new EntityManager(DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]), $orm);
+$em = new SetupManager(DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]), $orm);
 $metadata = $em->getMetadataFactory()->getAllMetadata();
 foreach ($metadata as $item) $item->customRepositoryClassName = null;
 $tables = [Appartment::class, RoomCategory::class, Price::class, Subsidiary::class,
@@ -103,6 +119,29 @@ $retry = $service->ensure($input);
 verifyRoom($retry === $result && $em->getRepository(Appartment::class)->count([]) === 4
     && $em->getRepository(Price::class)->count([]) === 7, 'Retried request created duplicate rooms or rates.');
 verifyRoom(count($config->getSelectedRoomIds()) === 4, 'Retry duplicated the released room ID.');
+$remove=['key'=>'fazakerley','label'=>'Fazakerley Room','roomId'=>(string)$new->getId(),'anchors'=>$input['anchors']];
+foreach ([['-2 days',true],['+2 days',false]] as [$end,$blocking]) {
+    $stay=new Reservation(); $stay->setAppartment($new); $stay->setEndDate(new DateTime($end));
+    $stay->setReservationStatus((new ReservationStatus())->setIsBlocking($blocking)); $em->stays[]=$stay;
+}
+$removed=$service->remove($remove);
+verifyRoom($removed['state'] === 'inactive' && !$new->isActive(), 'Room was not disabled.');
+verifyRoom(!in_array($new->getId(),$config->getSelectedRoomIds(),true), 'Removed room still released online.');
+verifyRoom(count($em->stays) === 2 && $em->getRepository(Appartment::class)->count([]) === 4
+    && $em->getRepository(Price::class)->count([]) === 7, 'Deletion damaged room, price or guest history.');
+verifyRoom($service->remove($remove) === $removed, 'Repeated removal is not idempotent.');
+$restored=$service->ensure([...$input,'roomId'=>(string)$new->getId()]);
+verifyRoom($restored === $result && $new->isActive(), 'Restoring a draft did not reuse its room.');
+foreach ($repository->findBy([]) as $room) {
+    $service->remove(['key'=>'room-'.$room->getId(),'label'=>$room->getRoomCategory()->getName(),'roomId'=>(string)$room->getId(),
+        'anchors'=>json_encode(['Dudley Room','Stanley Room','Gee Room','Fazakerley Room'])]);
+}
+verifyRoom($config->getSelectedRoomIds() === [], 'Deleting the last room did not close online inventory.');
+verifyRoom($service->ensure([...$input,'roomId'=>(string)$new->getId()]) === $result,
+    'Publishing after deleting every room lost the property or made a duplicate.');
+$legacy=$service->ensure([...$input,'key'=>'dudley','label'=>'Dudley Room','roomId'=>(string)$roomIds[0]]);
+verifyRoom($legacy['roomId'] === $roomIds[0], 'A restored original room received a different identity.');
+$service->remove(['key'=>'dudley','label'=>'Dudley Room','roomId'=>(string)$roomIds[0],'anchors'=>json_encode(['Fazakerley Room'])]);
 $anotherProperty=new Subsidiary(); $anotherProperty->setName('Other property'); $anotherProperty->setDescription('Other'); $em->persist($anotherProperty); $em->flush();
 // HTTP access and CSRF guards must reject before creating any inventory.
 $stack = new RequestStack(); $request = Request::create('/'); $request->setSession(new Session(new MockArraySessionStorage())); $stack->push($request);
@@ -111,12 +150,16 @@ $container = new Container(); $container->set('security.csrf.token_manager', $to
 $controller = new CastleHouseRoomController(); $controller->setContainer($container);
 $denied = $controller->ensure(Request::create('/reservation/castle-house/rooms','POST',$input),$service);
 verifyRoom($denied->getStatusCode() === 403, 'Missing CSRF token was accepted.');
+verifyRoom($controller->remove(Request::create('/reservation/castle-house/rooms/remove','POST',$remove),$service)->getStatusCode() === 403,
+    'Room deletion accepted a missing CSRF token.');
 $readOnly = $controller->form($tokens);
 verifyRoom($readOnly->getStatusCode() === 200 && str_contains($readOnly->headers->get('Cache-Control'),'no-store'), 'Unsafe setup token caching.');
 $class = (new ReflectionClass($controller))->getAttributes(IsGranted::class);
 verifyRoom($class[0]->getArguments()[0] === 'ROLE_RESERVATIONS', 'Room setup lost its reservation-management role guard.');
 $route=(new ReflectionMethod($controller,'ensure'))->getAttributes(Route::class)[0]->getArguments();
 verifyRoom($route['methods'] === ['POST'], 'Room setup must never write on GET.');
+$route=(new ReflectionMethod($controller,'remove'))->getAttributes(Route::class)[0]->getArguments();
+verifyRoom($route['methods'] === ['POST'], 'Room deletion must never write on GET.');
 foreach (['0','-1','no-price','1000000'] as $badPrice) {
     $rejected=false;
     try { $service->ensure([...$input, 'nightlyPence'=>$badPrice]); } catch (BadRequestHttpException) { $rejected=true; }
@@ -136,4 +179,17 @@ foreach ([['label'=>'Changed room name'], ['anchors'=>json_encode(['An unrelated
     verifyRoom(!$connection->isTransactionActive() && (int)$connection->fetchOne('SELECT COUNT(*) FROM appartments') === 4
         && (int)$connection->fetchOne('SELECT COUNT(*) FROM prices') === 7, 'Rejected request left a partial room or prices.');
 }
-echo "PASS: database-backed room/category creation, private pricing, exclusive property scope, online release, idempotent retries and CSRF/role guards.\n";
+foreach (['+1 day','+10 days'] as $end) {
+    $fresh = new SetupManager($connection,$orm);
+    foreach ($fresh->getMetadataFactory()->getAllMetadata() as $item) $item->customRepositoryClassName=null;
+    $freshRoom=$fresh->find(Appartment::class,$new->getId());
+    $stay=new Reservation(); $stay->setAppartment($freshRoom); $stay->setEndDate(new DateTime($end));
+    $stay->setReservationStatus((new ReservationStatus())->setIsBlocking(true)); $fresh->stays=[$stay];
+    $freshRooms=new SetupRooms($fresh); $freshConfig=new SetupConfig($fresh->find(OnlineBookingConfig::class,$config->getId()),$fresh->find(ReservationOrigin::class,$origin->getId()),$freshRooms);
+    $blocked=false;
+    try { (new CastleHouseRoomService($fresh,$freshRooms,$freshConfig))->remove($remove); }
+    catch (ConflictHttpException $error) { $blocked=$error->getMessage() === 'room_has_bookings'; }
+    verifyRoom($blocked && (bool)$connection->fetchOne('SELECT active FROM appartments WHERE id = ?',[$new->getId()]),
+        'Current or upcoming bookings did not prevent deletion.');
+}
+echo "PASS: database-backed setup, deletion, restore, empty inventory, guest-booking guards, retained history, idempotence and CSRF/role guards.\n";
